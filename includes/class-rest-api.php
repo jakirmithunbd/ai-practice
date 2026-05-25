@@ -50,6 +50,35 @@ class AI_Practice_REST_API
             'callback'            => [ $this, 'handle_site_info' ],
             'permission_callback' => [ $this, 'check_permission' ],
         ]);
+
+        // POST /wp-json/ai-practice/v1/agent
+        register_rest_route($this->namespace, '/agent', [
+            'methods'             => WP_REST_Server::CREATABLE,
+            'callback'            => [ $this, 'handle_agent' ],
+            'permission_callback' => [ $this, 'check_permission' ],
+            'args'                => [
+                'message' => [
+                    'required'          => true,
+                    'type'              => 'string',
+                    'sanitize_callback' => 'sanitize_textarea_field',
+                ],
+            ],
+        ]);
+
+        // POST /wp-json/ai-practice/v1/seo-description
+        register_rest_route($this->namespace, '/seo-description', [
+            'methods'             => WP_REST_Server::CREATABLE,
+            'callback'            => [ $this, 'handle_seo_description' ],
+            'permission_callback' => [ $this, 'check_permission' ],
+            'args'                => [
+                'post_id' => [
+                    'required'          => true,
+                    'type'              => 'integer',
+                    'sanitize_callback' => 'absint',
+                    'validate_callback' => fn( $v ) => get_post( $v ) !== null,
+                ],
+            ],
+        ]);
     }
 
     // -------------------------------------------------------------------------
@@ -182,6 +211,45 @@ class AI_Practice_REST_API
                 'products' => class_exists('WooCommerce') ? (int) $product_counts->publish : 'WooCommerce not active',
             ],
             'woocommerce' => class_exists('WooCommerce'),
+        ]);
+    }
+
+    public function handle_agent( WP_REST_Request $request ): WP_REST_Response|WP_Error
+    {
+        $agent  = new AI_Practice_Agent();
+        $result = $agent->run( $request->get_param('message') );
+
+        if ( is_wp_error($result) ) {
+            return new WP_Error( $result->get_error_code(), $result->get_error_message(), [ 'status' => 502 ] );
+        }
+
+        return rest_ensure_response( array_merge( [ 'success' => true ], $result ) );
+    }
+
+    public function handle_seo_description(WP_REST_Request $request): WP_REST_Response|WP_Error
+    {
+        $post    = get_post( $request->get_param('post_id') );
+        $content = wp_strip_all_tags( $post->post_content );
+        $content = substr( $content, 0, 2000 );
+
+        $api    = new AI_Practice_Anthropic();
+        $result = $api->send_message(
+            "Post title: {$post->post_title}\n\nContent: {$content}",
+            'Write a single SEO meta description for this post. It must be under 155 characters, no quotes, no label, just the description.'
+        );
+
+        if ( is_wp_error($result) ) {
+            return new WP_Error( $result->get_error_code(), $result->get_error_message(), [ 'status' => 502 ] );
+        }
+
+        $description = substr( trim($result), 0, 155 );
+
+        return rest_ensure_response([
+            'success'     => true,
+            'post_id'     => $post->ID,
+            'title'       => $post->post_title,
+            'description' => $description,
+            'length'      => strlen($description),
         ]);
     }
 
